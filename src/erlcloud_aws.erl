@@ -101,13 +101,12 @@ aws_request2_no_update(Method, Protocol, Host, Port, Path, Params, #aws_config{}
         case Method of
             get ->
                 Req = lists:flatten([URL, $?, Query]),
-                httpc:request(get, {Req, []}, [{timeout, Config#aws_config.timeout}], []);
+                lhttpc:request(Req, get, [], Config#aws_config.timeout);
             _ ->
-                httpc:request(Method,
-                              {lists:flatten(URL), [], "application/x-www-form-urlencoded; charset=utf-8",
-                               list_to_binary(Query)}, [{timeout, Config#aws_config.timeout}], [])
+                lhttpc:request(lists:flatten(URL), Method, 
+                  [{"content-type", "application/x-www-form-urlencoded; charset=utf-8"}], 
+                  list_to_binary(Query), Config#aws_config.timeout) 
         end,
-    
     http_body(Response).
 
 param_list([], _Key) -> [];
@@ -190,13 +189,13 @@ timestamp_to_gregorian_seconds(Timestamp) ->
 get_credentials_from_metadata() ->
     %% TODO this function should retry on errors getting credentials
     %% First get the list of roles
-    case http_body(httpc:request("http://169.254.169.254/latest/meta-data/iam/security-credentials/")) of
+    case http_body(lhttpc:request("http://169.254.169.254/latest/meta-data/iam/security-credentials/")) of
         {error, Reason} ->
             {error, Reason};
         {ok, Body} ->
             %% Always use the first role
             Role = string:sub_word(Body, 1, $\n),
-            case http_body(httpc:request(
+            case http_body(lhttpc:request(
                              "http://169.254.169.254/latest/meta-data/iam/security-credentials/" ++ Role)) of
                 {error, Reason} ->
                     {error, Reason};
@@ -223,7 +222,7 @@ port_to_str(Port) when is_list(Port) ->
 http_body(Return) ->
     case http_headers_body(Return) of
         {ok, {_, Body}} ->
-            {ok, Body};
+            {ok, binary_to_list(Body)};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -231,10 +230,10 @@ http_body(Return) ->
 -type headers() :: [{string(), string()}].
 -spec http_headers_body({ok, tuple()} | {error, term()}) -> {ok, {headers(), string()}} | {error, tuple()}.
 %% Extract the headers and body and do error handling on the return of a httpc:request call.
-http_headers_body({ok, {{_HTTPVer, OKStatus, _StatusLine}, Headers, Body}}) 
+http_headers_body({ok, {{OKStatus, _StatusLine}, Headers, Body}}) 
   when OKStatus >= 200, OKStatus =< 299 ->
     {ok, {Headers, Body}};
-http_headers_body({ok, {{_HTTPVer, Status, StatusLine}, _Headers, Body}}) ->
+http_headers_body({ok, {{Status, StatusLine}, _Headers, Body}}) ->
     {error, {http_error, Status, StatusLine, Body}};
 http_headers_body({error, Reason}) ->
     {error, {socket_error, Reason}}.
