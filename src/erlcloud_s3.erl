@@ -1052,7 +1052,7 @@ s3_xml_request(Config, Method, Host, Path, Subresource, Params, POSTData, Header
     end.
 
 s3_request(Config, Method, Host, Path, Subreasource, Params, POSTData, Headers) ->
-    case s3_request2(Config, Method, Host, Path, Subreasource, Params, POSTData, Headers) of
+    case s3_request4(Config, Method, Host, Path, Subreasource, Params, POSTData, Headers) of
         {ok, Result} ->
             Result;
         {error, Reason} ->
@@ -1064,7 +1064,17 @@ s3_request(Config, Method, Host, Path, Subreasource, Params, POSTData, Headers) 
 s3_request2(Config, Method, Host, Path, Subresource, Params, POSTData, Headers) ->
     case erlcloud_aws:update_config(Config) of
         {ok, Config1} ->
-            s3_request2_no_update(Config1, Method, Host, Path, Subresource, Params, POSTData, Headers);
+            s3_request4_no_update(Config1, Method, Host, Path, Subresource, Params, POSTData, Headers);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% s3_request4 returns {ok, Body} or {error, Reason} instead of throwing as s3_request does
+%% This is the preferred pattern for new APIs
+s3_request4(Config, Method, Host, Path, Subresource, Params, POSTData, Headers) ->
+    case erlcloud_aws:update_config(Config) of
+        {ok, Config1} ->
+            s3_request4_no_update(Config1, Method, Host, Path, Subresource, Params, POSTData, Headers);
         {error, Reason} ->
             {error, Reason}
     end.
@@ -1123,6 +1133,58 @@ s3_request2_no_update(Config, Method, Host, Path, Subresource, Params, Body, Hea
                                       [$&, erlcloud_http:make_query_string(Params, no_assignment)]
                                 end
                                ]),
+
+    Request = #aws_request{service = s3, uri = RequestURI, method = Method},
+    Request2 = case Method of
+                   M when M =:= get orelse M =:= head orelse M =:= delete ->
+                       Request#aws_request{
+                         request_headers = RequestHeaders,
+                         request_body = <<>>};
+                   _ ->
+                       Headers2 = case lists:keyfind("content-type", 1, RequestHeaders) of
+                                      false ->
+                                          [{"content-type", ContentType} | RequestHeaders];
+                                      _ ->
+                                          RequestHeaders
+                                  end,
+                       Request#aws_request{
+                         request_headers = Headers2,
+                         request_body = Body}
+               end,
+    Request3 = erlcloud_retry:request(Config, Request2, fun s3_result_fun/1),
+    erlcloud_aws:request_to_return(Request3).
+
+s3_request4_no_update(Config, Method, Bucket, Path, Subresource, Params, Body, Headers) ->
+    ContentType = proplists:get_value("content-type", Headers, ""),
+    FParams = [Param || {_, Value} = Param <- Params, Value =/= undefined],
+    FHeaders = [Header || {_, Val} = Header <- Headers, Val =/= undefined],
+
+    QueryParams = case Subresource of "" -> FParams; _ -> [{Subresource, ""} | FParams] end,
+    EscapedPath = erlcloud_http:url_encode_loose(Path),
+
+    HostName = lists:flatten(
+        [case Bucket of "" -> ""; _ -> [Bucket, $.] end,
+        Config#aws_config.s3_host]),
+
+    RequestHeaders = erlcloud_aws:sign_v4(
+        Method, EscapedPath, Config,
+        [{"host", HostName} | FHeaders ],
+        Body,
+        erlcloud_aws:aws_region_from_host(Config#aws_config.s3_host),
+        "s3", QueryParams),
+
+    RequestURI = lists:flatten([
+        Config#aws_config.s3_scheme,
+        Config#aws_config.s3_host, port_spec(Config),
+        EscapedPath,
+        case Subresource of "" -> ""; _ -> [$?, Subresource] end,
+        if
+            FParams =:= [] -> "";
+            Subresource =:= "" ->
+              [$?, erlcloud_http:make_query_string(FParams, no_assignment)];
+            true ->
+              [$&, erlcloud_http:make_query_string(FParams, no_assignment)]
+        end]),
 
     Request = #aws_request{service = s3, uri = RequestURI, method = Method},
     Request2 = case Method of
