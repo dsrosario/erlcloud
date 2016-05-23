@@ -5,15 +5,15 @@
 
 %% ELB API Functions
 -export([create_load_balancer/3, create_load_balancer/4, create_load_balancer/5,
-         delete_load_balancer/1, delete_load_balancer/2,
+    delete_load_balancer/1, delete_load_balancer/2,
 
-         register_instance/2, register_instance/3,
-         deregister_instance/2, deregister_instance/3,
+    register_instance/2, register_instance/3,
+    deregister_instance/2, deregister_instance/3,
 
-         describe_load_balancer/1, describe_load_balancer/2,
-         describe_load_balancers/1, describe_load_balancers/2,
+    describe_load_balancer/1, describe_load_balancer/2,
+    describe_load_balancers/1, describe_load_balancers/2,
 
-         configure_health_check/2, configure_health_check/3]).
+    configure_health_check/2, configure_health_check/3, describe_load_balancer_attributes/1, describe_load_balancer_attributes/2]).
 
 -include_lib("erlcloud/include/erlcloud.hrl").
 -include_lib("erlcloud/include/erlcloud_aws.hrl").
@@ -22,6 +22,9 @@
 
 -import(erlcloud_xml, [get_text/2]).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
 -spec(new/2 :: (string(), string()) -> aws_config()).
 new(AccessKeyID, SecretAccessKey) ->
     #aws_config{access_key_id=AccessKeyID,
@@ -117,21 +120,50 @@ configure_health_check(LB, Target, Config) when is_list(LB) ->
                         {"HealthCheck.Target", Target}]).
 
 
+-spec describe_load_balancer(string()) -> proplist().
 describe_load_balancer(Name) ->
     describe_load_balancer(Name, default_config()).
 describe_load_balancer(Name, Config) ->
     describe_load_balancers([Name], Config).
 
-
+-spec describe_load_balancers([string()]) -> proplist().
 describe_load_balancers(Names) ->
     describe_load_balancers(Names, default_config()).
 describe_load_balancers(Names, Config) ->
     elb_request(Config,
                 "DescribeLoadBalancers",
-                [erlcloud_aws:param_list(Names, "LoadBalancerNames.member")]).
+                [erlcloud_aws:param_list(Names, "LoadBalancerName.member")]).
+
+-spec describe_load_balancer_attributes(string()) -> proplist().
+describe_load_balancer_attributes(Name) ->
+    describe_load_balancer_attributes(Name, default_config()).
+
+-spec describe_load_balancer_attributes(string(), aws_config()) -> proplist().
+describe_load_balancer_attributes(Name, Config) ->
+    Node = elb_request(Config,
+        "DescribeLoadBalancerAttributes",
+        [{"LoadBalancerName", Name}]),
+    extract_elb_attribs(Node).
 
 
-
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+-spec extract_elb_attribs(proplist()) -> proplist().
+extract_elb_attribs(Node) ->
+    Atts = erlcloud_xml:decode(
+        [
+            {access_log_enabled, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/AccessLog/Enabled", boolean},
+            {access_log_s3_name, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/AccessLog/S3BucketName", text},
+            {access_log_s3_prefix, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/AccessLog/S3BucketPrefix", text},
+            {access_log_emit_interval, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/AccessLog/EmitInterval", integer},
+            {connection_settings_idletimeout, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/ConnectionSettings/IdleTimeout", integer},
+            {cross_zone_load_balancing_enabled, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/CrossZoneLoadBalancing/Enabled", boolean},
+            {connection_draining_enabled, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/ConnectionDraining/Enabled", boolean},
+            {connection_draining_timeout, "DescribeLoadBalancerAttributesResult/LoadBalancerAttributes/ConnectionDraining/Timeout", integer}
+        ],
+        Node),
+    Atts.
 
 elb_request(Config, Action, Params) ->
     QParams = [{"Action", Action}, {"Version", ?API_VERSION} | Params],
